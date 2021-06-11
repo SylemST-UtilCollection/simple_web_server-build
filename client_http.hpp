@@ -50,13 +50,14 @@ namespace SimpleWeb {
     }
   };
 } // namespace SimpleWeb
-#ifndef USE_STANDALONE_ASIO
+#ifndef ASIO_STANDALONE
 namespace boost {
 #endif
   namespace asio {
-    template <> struct is_match_condition<SimpleWeb::HeaderEndMatch> : public std::true_type {};
+    template <>
+    struct is_match_condition<SimpleWeb::HeaderEndMatch> : public std::true_type {};
   } // namespace asio
-#ifndef USE_STANDALONE_ASIO
+#ifndef ASIO_STANDALONE
 } // namespace boost
 #endif
 
@@ -151,7 +152,7 @@ namespace SimpleWeb {
     class Connection : public std::enable_shared_from_this<Connection> {
     public:
       template <typename... Args>
-      Connection(std::shared_ptr<ScopeRunner> handler_runner_, Args &&... args) noexcept
+      Connection(std::shared_ptr<ScopeRunner> handler_runner_, Args &&...args) noexcept
           : handler_runner(std::move(handler_runner_)), socket(new socket_type(std::forward<Args>(args)...)) {}
 
       std::shared_ptr<ScopeRunner> handler_runner;
@@ -173,7 +174,7 @@ namespace SimpleWeb {
           timer = nullptr;
           return;
         }
-        timer = std::unique_ptr<asio::steady_timer>(new asio::steady_timer(get_socket_executor(*socket), std::chrono::seconds(seconds)));
+        timer = make_steady_timer(*socket, std::chrono::seconds(seconds));
         std::weak_ptr<Connection> self_weak(this->shared_from_this()); // To avoid keeping Connection instance alive longer than needed
         timer->async_wait([self_weak](const error_code &ec) {
           if(!ec) {
@@ -499,22 +500,33 @@ namespace SimpleWeb {
     }
 
     std::pair<std::string, unsigned short> parse_host_port(const std::string &host_port, unsigned short default_port) const noexcept {
-      std::pair<std::string, unsigned short> parsed_host_port;
-      std::size_t host_end = host_port.find(':');
-      if(host_end == std::string::npos) {
-        parsed_host_port.first = host_port;
-        parsed_host_port.second = default_port;
+      std::string host, port;
+      host.reserve(host_port.size());
+      bool parse_port = false;
+      int square_count = 0; // To parse IPv6 addresses
+      for(auto chr : host_port) {
+        if(chr == '[')
+          ++square_count;
+        else if(chr == ']')
+          --square_count;
+        else if(square_count == 0 && chr == ':')
+          parse_port = true;
+        else if(!parse_port)
+          host += chr;
+        else
+          port += chr;
       }
+
+      if(port.empty())
+        return {std::move(host), default_port};
       else {
-        parsed_host_port.first = host_port.substr(0, host_end);
         try {
-          parsed_host_port.second = static_cast<unsigned short>(std::stoul(host_port.substr(host_end + 1)));
+          return {std::move(host), static_cast<unsigned short>(std::stoul(port))};
         }
         catch(...) {
-          parsed_host_port.second = default_port;
+          return {std::move(host), default_port};
         }
       }
-      return parsed_host_port;
     }
 
     virtual std::shared_ptr<Connection> create_connection() noexcept = 0;
